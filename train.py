@@ -19,6 +19,10 @@ import optax
 import xax
 from jaxtyping import Array, PRNGKeyArray
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 # These are in the order of the neural network outputs.
 ZEROS: list[tuple[str, float]] = [
     ("dof_right_shoulder_pitch_03", 0.0),
@@ -43,6 +47,55 @@ ZEROS: list[tuple[str, float]] = [
     ("dof_left_ankle_02", math.radians(-30.0)),
 ]
 
+# The total number of joints in the humanoid.
+# This number affects the number of input and output dimensions of the NN.
+NUM_JOINTS = 20
+assert(len(ZEROS) == NUM_JOINTS)
+
+# The total number of bodies in the humanoid
+# Each body will produce a center of mass inertia + velocity observation.
+NUM_BODIES = 23
+
+# The number of axes for the IMU sensors. These are optional inputs to the actor NN, and always inputs to the critic NN.
+NUM_ACCEL_AXIS = 3
+NUM_GYRO_AXIS = 3
+
+# The number of axes for the projected gravity observation.
+NUM_PROJECTED_GRAVITY_AXIS = 3
+
+# The number of time observations, which are the sine and cosine of the current timestep.
+NUM_TIME_OBSERVATIONS = 2
+
+# The number of ways that the actor and critic NN observes each joint.
+# The we observe the joint position and velocity, so each joint is observed twice.
+NUM_JOINT_OBSERVATIONS = 2
+
+# The minimum number of inputs to the actor neural network.
+# optionally, we will add both the NUM_ACCEL_AXIS and NUM_GYRO_AXIS to the inputs.
+# That depends on the value of `config.use_acc_gyro`
+NUM_ACTOR_INPUTS_MIN = (
+    NUM_TIME_OBSERVATIONS  # Timestep observation (sin + cos)
+    + (NUM_JOINTS * NUM_JOINT_OBSERVATIONS)  # Joint positions and velocities
+    + NUM_PROJECTED_GRAVITY_AXIS  # Projected gravity
+)
+
+NUM_INERTIA_OBSERVATIONS = 10  # Number of observations for the intertia of the center of mass of each body
+NUM_VELOCITY_OBSERVATIONS = 6  # Number of observations for the velocity of the center of mass of each body
+NUM_BASE_POSE_OBSERVATIONS = 3 + 4 # Base position (XYZ) + orientation (WXYZ)
+
+NUM_CRITIC_INPUTS = (
+    NUM_TIME_OBSERVATIONS  # Timestep observation (sin + cos)
+    + (NUM_JOINTS * NUM_JOINT_OBSERVATIONS)  # Joint positions and velocities
+    + (NUM_BODIES * NUM_INERTIA_OBSERVATIONS)  # Center of mass inertia observations
+    + (NUM_BODIES * NUM_VELOCITY_OBSERVATIONS)  # Center of mass velocity observations
+    + NUM_ACCEL_AXIS  # IMU acceleration
+    + NUM_GYRO_AXIS  # IMU gyroscope
+    + NUM_PROJECTED_GRAVITY_AXIS
+    + NUM_JOINTS # Actuator forces for each joint
+    + NUM_BASE_POSE_OBSERVATIONS  # Base position and orientation
+)
+
+assert(NUM_CRITIC_INPUTS == 446)
 
 @dataclass
 class HumanoidWalkingTaskConfig(ksim.PPOConfig):
@@ -470,9 +523,9 @@ class HumanoidWalkingTask(ksim.PPOTask[HumanoidWalkingTaskConfig]):
     def get_model(self, key: PRNGKeyArray) -> Model:
         return Model(
             key,
-            num_actor_inputs=51 if self.config.use_acc_gyro else 45,
-            num_actor_outputs=len(ZEROS),
-            num_critic_inputs=446,
+            num_actor_inputs=(NUM_ACTOR_INPUTS_MIN + NUM_ACCEL_AXIS + NUM_GYRO_AXIS) if self.config.use_acc_gyro else NUM_ACTOR_INPUTS_MIN, 
+            num_actor_outputs=NUM_JOINTS, # Output control is the desired joint positions, in radians
+            num_critic_inputs=NUM_CRITIC_INPUTS,
             min_std=0.001,
             max_std=1.0,
             var_scale=self.config.var_scale,
@@ -509,6 +562,10 @@ class HumanoidWalkingTask(ksim.PPOTask[HumanoidWalkingTaskConfig]):
             ]
 
         obs_n = jnp.concatenate(obs, axis=-1)
+
+        # Ensure that the number of inputs matches the model's expectation.
+        assert(len(obs_n) == model.num_inputs)
+
         action, carry = model.forward(obs_n, carry)
 
         return action, carry
@@ -523,9 +580,9 @@ class HumanoidWalkingTask(ksim.PPOTask[HumanoidWalkingTaskConfig]):
         time_1 = observations["timestep_observation"]
         dh_joint_pos_j = observations["joint_position_observation"]
         dh_joint_vel_j = observations["joint_velocity_observation"]
-        com_inertia_n = observations["center_of_mass_inertia_observation"]
-        com_vel_n = observations["center_of_mass_velocity_observation"]
-        imu_acc_3 = observations["sensor_observation_imu_acc"]
+        com_inertia_n = observations["center_of_mass_inertia_observation"] # 10x number of bodies, https://mujoco.readthedocs.io/en/stable/APIreference/APItypes.html#c-frame-variables
+        com_vel_n = observations["center_of_mass_velocity_observation"] # 6x number of bodies , https://mujoco.readthedocs.io/en/stable/APIreference/APItypes.html#mjdata
+        imu_acc_3 = observations["sensor_observation_imu_acc"] 
         imu_gyro_3 = observations["sensor_observation_imu_gyro"]
         proj_grav_3 = observations["projected_gravity_observation"]
         act_frc_obs_n = observations["actuator_force_observation"]
@@ -537,9 +594,9 @@ class HumanoidWalkingTask(ksim.PPOTask[HumanoidWalkingTaskConfig]):
                 jnp.sin(time_1),
                 jnp.cos(time_1),
                 dh_joint_pos_j,  # NUM_JOINTS
-                dh_joint_vel_j / 10.0,  # NUM_JOINTS
-                com_inertia_n,  # 160
-                com_vel_n,  # 96
+                dh_joint_vel_j / 10.0,  # NUM_JOINTS, TODO: why is this divided by 10?
+                com_inertia_n,  # NUM_BODIES * NUM_INERTIA_OBSERVATIONS
+                com_vel_n,  # NUM_BODIES * NUM_VELOCITY_OBSERVATIONS
                 imu_acc_3,  # 3
                 imu_gyro_3,  # 3
                 proj_grav_3,  # 3
@@ -549,6 +606,9 @@ class HumanoidWalkingTask(ksim.PPOTask[HumanoidWalkingTaskConfig]):
             ],
             axis=-1,
         )
+
+        # Ensure that the number of inputs matches the model's expectation.
+        assert(len(obs_n) == model.num_inputs)
 
         return model.forward(obs_n, carry)
 
