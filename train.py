@@ -95,8 +95,6 @@ NUM_CRITIC_INPUTS = (
     + NUM_BASE_POSE_OBSERVATIONS  # Base position and orientation
 )
 
-assert(NUM_CRITIC_INPUTS == 446)
-
 @dataclass
 class HumanoidWalkingTaskConfig(ksim.PPOConfig):
     """Config for the humanoid walking task."""
