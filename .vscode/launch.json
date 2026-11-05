@@ -1,0 +1,59 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Train KSim Gym",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "train",
+            "python": "${workspaceFolder}/venv/bin/python",
+            "cwd": "${workspaceFolder}",
+        },
+        {
+            "name": "Collect Dataset",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "train",
+            "python": "${workspaceFolder}/venv/bin/python",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "load_from_ckpt_path=./humanoid_walking_task/run_20/checkpoints/ckpt.bin",
+                "run_mode=collect_dataset",
+            ],
+            "justMyCode": false
+        },
+        {
+            "name": "Run Viewer",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "train",
+            "python": "${workspaceFolder}/venv/bin/python",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "load_from_ckpt_path=./humanoid_walking_task/run_20/checkpoints/ckpt.bin",
+                "run_mode=view",
+                "viewer_save_renders=true",
+            ],
+            "justMyCode": false
+        },
+        {
+            "name": "Debug - Dataset",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "debug",
+            "python": "${workspaceFolder}/venv/bin/python",
+            "cwd": "${workspaceFolder}",
+        },
+        {
+            "name": "Unit Tests",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "python": "${workspaceFolder}/venv/bin/python",
+            "cwd": "${workspaceFolder}",
+        }
+    ]
+}
